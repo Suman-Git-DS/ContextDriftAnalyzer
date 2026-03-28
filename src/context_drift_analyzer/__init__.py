@@ -24,7 +24,7 @@ from context_drift_analyzer.strategies.embedding_base import EmbeddingStrategy
 from context_drift_analyzer.strategies.callable_embedding import CallableEmbeddingStrategy
 from context_drift_analyzer.wrap import wrap, DriftClientWrapper
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 __all__ = [
     # Main entry point

@@ -1,50 +1,61 @@
 """Session memory persistence via .session_memory JSON files.
 
-Stores the original context fingerprint, session summaries, drift history,
-and checkpoint embeddings so drift can be tracked across restarts and deploys.
+Stores a full audit trail of every conversation organized by session.
+Each session contains all Q&A exchanges with their drift scores.
 
-The .session_memory file is a plain JSON file stored locally. It contains:
-
-- original_context: the full initial context text (system prompt + few-shots)
-- original_vector: embedding of the original context
-- checkpoint_vector: embedding at last drift check
-- checkpoint_text: text at last checkpoint
-- last_response_vector: most recent response embedding
-- last_response_text: most recent response text
-- session_summaries: list of past session summaries (configurable count)
-- session_count: total number of sessions
-- total_turns: cumulative turn count across all sessions
-- context_frozen: true once original fingerprint is set
-- drift_history: list of {turn, score, verdict, explanation} entries
+Structure:
+    {
+      "original_context": "System prompt + few-shot examples",
+      "session_count": 2,
+      "context_frozen": false,
+      "sessions": [
+        {
+          "session_number": 1,
+          "status": "completed",
+          "exchanges": [
+            {
+              "exchange": 1,
+              "user": "What credit cards do you offer?",
+              "assistant": "We offer Acme Rewards...",
+              "score": 95.0,
+              "verdict": "fresh",
+              "explanation": "Context is well-preserved..."
+            }
+          ],
+          "summary": "Topics discussed: credit cards, home loans.",
+          "final_drift_score": 85.7
+        }
+      ]
+    }
 
 Note: .session_memory files should be added to .gitignore. Do not commit
-them — they may contain embeddings of your production conversations.
+them — they may contain content from your conversations.
 """
 
 from __future__ import annotations
 
 import json
-import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 
 @dataclass
 class SessionMemoryData:
-    """In-memory representation of the .session_memory file."""
+    """In-memory representation of the .session_memory file.
+
+    Fields:
+        original_context: System prompt + few-shot examples (the ground truth).
+        session_count: Total sessions (completed + active).
+        context_frozen: Whether context modifications are locked.
+        sessions: Full audit trail — list of session dicts, each containing
+            exchanges with user/assistant messages and drift scores.
+    """
 
     original_context: str = ""
-    original_vector: list[float] = field(default_factory=list)
-    checkpoint_vector: list[float] = field(default_factory=list)
-    checkpoint_text: str = ""
-    last_response_vector: list[float] = field(default_factory=list)
-    last_response_text: str = ""
-    session_summaries: list[dict] = field(default_factory=list)
     session_count: int = 0
-    total_turns: int = 0
     context_frozen: bool = False
-    drift_history: list[dict] = field(default_factory=list)
+    sessions: list[dict] = field(default_factory=list)
 
 
 class SessionMemoryStore:
@@ -69,9 +80,15 @@ class SessionMemoryStore:
         try:
             with open(self.path, "r", encoding="utf-8") as f:
                 raw = json.load(f)
+
+            # Backward compatibility: convert old format to new
+            if "drift_history" in raw and "sessions" not in raw:
+                raw = self._migrate_old_format(raw)
+
+            valid_fields = SessionMemoryData.__dataclass_fields__
             return SessionMemoryData(**{
                 k: v for k, v in raw.items()
-                if k in SessionMemoryData.__dataclass_fields__
+                if k in valid_fields
             })
         except (json.JSONDecodeError, TypeError):
             return SessionMemoryData()
@@ -79,7 +96,17 @@ class SessionMemoryStore:
     def save(self, data: SessionMemoryData) -> None:
         """Save session memory to disk."""
         with open(self.path, "w", encoding="utf-8") as f:
-            json.dump(asdict(data), f, indent=2, ensure_ascii=False)
+            json.dump(
+                {
+                    "original_context": data.original_context,
+                    "session_count": data.session_count,
+                    "context_frozen": data.context_frozen,
+                    "sessions": data.sessions,
+                },
+                f,
+                indent=2,
+                ensure_ascii=False,
+            )
 
     def delete(self) -> bool:
         """Delete the .session_memory file. Returns True if deleted."""
@@ -101,3 +128,50 @@ class SessionMemoryStore:
                 f.write(f"\n{pattern}\n")
         else:
             gitignore.write_text(f"{pattern}\n", encoding="utf-8")
+
+    @staticmethod
+    def _migrate_old_format(raw: dict) -> dict:
+        """Convert old flat drift_history format to new sessions format."""
+        sessions = []
+        # Group old drift_history by session number
+        history = raw.get("drift_history", [])
+        by_session: dict[int, list] = {}
+        for entry in history:
+            sn = entry.get("session", 1)
+            by_session.setdefault(sn, []).append(entry)
+
+        for sn in sorted(by_session.keys()):
+            entries = by_session[sn]
+            exchanges = []
+            for e in entries:
+                exchanges.append({
+                    "exchange": e.get("exchange", e.get("turn", 0)),
+                    "user": "",
+                    "assistant": "",
+                    "score": e.get("score", 0),
+                    "verdict": e.get("verdict", ""),
+                    "explanation": e.get("explanation", ""),
+                })
+            final_score = entries[-1].get("score", 0) if entries else 0
+            sessions.append({
+                "session_number": sn,
+                "status": "completed",
+                "exchanges": exchanges,
+                "summary": "(migrated from old format)",
+                "final_drift_score": final_score,
+            })
+
+        # Also migrate session_summaries if present
+        for s in raw.get("session_summaries", []):
+            sn = s.get("session_number", 0)
+            for sess in sessions:
+                if sess["session_number"] == sn:
+                    sess["summary"] = s.get("summary", "")
+                    break
+
+        return {
+            "original_context": raw.get("original_context", ""),
+            "session_count": raw.get("session_count", len(sessions)),
+            "context_frozen": raw.get("context_frozen", False),
+            "sessions": sessions,
+        }

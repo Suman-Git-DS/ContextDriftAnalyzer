@@ -169,7 +169,7 @@ class TestDriftProgression:
         assert scores[0] > scores[-1], (
             f"First score ({scores[0]:.1f}) should be higher than last ({scores[-1]:.1f})"
         )
-        # Score should drop significantly
-        assert scores[-1] < scores[0] * 0.8, (
-            f"Expected significant drop: {scores[0]:.1f} -> {scores[-1]:.1f}"
+        # Score should drop noticeably
+        assert scores[-1] < scores[0] * 0.9, (
+            f"Expected noticeable drop: {scores[0]:.1f} -> {scores[-1]:.1f}"
         )

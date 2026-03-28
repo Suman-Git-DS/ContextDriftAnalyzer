@@ -33,15 +33,27 @@ class TestCLI:
 
     def test_status_with_file(self, capsys):
         self._create_memory(
-            session_count=3,
-            total_turns=15,
+            session_count=2,
             context_frozen=False,
-            drift_history=[{"turn": 10, "score": 72.5, "verdict": "moderate", "explanation": "Some drift"}],
+            sessions=[
+                {
+                    "session_number": 1,
+                    "status": "completed",
+                    "exchanges": [
+                        {"exchange": 1, "user": "Hello", "assistant": "Hi",
+                         "score": 95.0, "verdict": "fresh", "explanation": "Good"},
+                        {"exchange": 2, "user": "Bye", "assistant": "See ya",
+                         "score": 72.5, "verdict": "moderate", "explanation": "Some drift"},
+                    ],
+                    "summary": "Topics discussed: Hello; Bye.",
+                    "final_drift_score": 72.5,
+                },
+            ],
         )
         cmd_status(FakeArgs(self.path))
         captured = capsys.readouterr()
-        assert "Sessions:" in captured.out
-        assert "3" in captured.out
+        assert "Session 1" in captured.out
+        assert "completed" in captured.out
         assert "72.5" in captured.out
 
     def test_reset(self, capsys):
@@ -58,16 +70,25 @@ class TestCLI:
 
     def test_history(self, capsys):
         self._create_memory(
-            drift_history=[
-                {"turn": 2, "session": 1, "score": 90.0, "verdict": "fresh", "explanation": "On topic"},
-                {"turn": 4, "session": 1, "score": 65.0, "verdict": "moderate", "explanation": "Drifting"},
-            ]
+            sessions=[{
+                "session_number": 1,
+                "status": "completed",
+                "exchanges": [
+                    {"exchange": 1, "user": "What is Python?", "assistant": "A language",
+                     "score": 90.0, "verdict": "fresh", "explanation": "On topic"},
+                    {"exchange": 2, "user": "Tell me about weather", "assistant": "Sunny today",
+                     "score": 65.0, "verdict": "moderate", "explanation": "Drifting"},
+                ],
+                "summary": "Discussed Python and weather.",
+                "final_drift_score": 65.0,
+            }],
         )
         cmd_history(FakeArgs(self.path))
         captured = capsys.readouterr()
         assert "90.0" in captured.out
         assert "65.0" in captured.out
         assert "fresh" in captured.out
+        assert "What is Python?" in captured.out
 
     def test_history_empty(self, capsys):
         self._create_memory()

@@ -30,8 +30,8 @@ class TestSession:
         s.add_user_message("Hi")
         turn = s.add_assistant_message("Hello! How can I help?")
         assert turn.role == "assistant"
-        assert turn.turn_number == 2
-        assert s.turn_count == 2
+        assert turn.turn_number == 1  # same exchange as user message
+        assert s.turn_count == 1  # 1 Q&A exchange
 
     def test_assistant_turns_filter(self):
         s = Session(system_prompt="test")
@@ -61,7 +61,7 @@ class TestSession:
         s = Session(system_prompt="test")
         s.add_user_message("Hello")
         s.add_assistant_message("World")
-        assert s.get_full_text() == "Hello World"
+        assert s.get_full_text() == "Q1: Hello\nA1: World"
 
     def test_reset(self):
         s = Session(system_prompt="Keep this")
@@ -74,8 +74,8 @@ class TestSession:
 
     def test_turn_counter_increments(self):
         s = Session(system_prompt="test")
-        s.add_user_message("1")
-        s.add_user_message("2")
-        s.add_assistant_message("3")
-        assert s.turn_count == 3
-        assert s.turns[-1].turn_number == 3
+        s.add_user_message("1")       # exchange 1
+        s.add_user_message("2")       # exchange 2
+        s.add_assistant_message("3")  # still exchange 2 (pairs with last user msg)
+        assert s.turn_count == 2  # 2 user messages = 2 exchanges
+        assert s.turns[-1].turn_number == 2

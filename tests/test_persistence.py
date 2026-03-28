@@ -24,10 +24,25 @@ class TestSessionMemoryStore:
         data = SessionMemoryData(
             original_context="You are a tutor.",
             session_count=2,
-            total_turns=10,
             context_frozen=True,
-            session_summaries=[{"session_number": 1, "summary": "Talked about Python"}],
-            drift_history=[{"turn": 5, "score": 75.0, "verdict": "mild"}],
+            sessions=[
+                {
+                    "session_number": 1,
+                    "status": "completed",
+                    "exchanges": [
+                        {
+                            "exchange": 1,
+                            "user": "What is Python?",
+                            "assistant": "Python is a programming language.",
+                            "score": 95.0,
+                            "verdict": "fresh",
+                            "explanation": "Context well-preserved.",
+                        }
+                    ],
+                    "summary": "Topics discussed: What is Python?.",
+                    "final_drift_score": 95.0,
+                }
+            ],
         )
         self.store.save(data)
         assert self.store.exists() is True
@@ -35,10 +50,9 @@ class TestSessionMemoryStore:
         loaded = self.store.load()
         assert loaded.original_context == "You are a tutor."
         assert loaded.session_count == 2
-        assert loaded.total_turns == 10
         assert loaded.context_frozen is True
-        assert len(loaded.session_summaries) == 1
-        assert len(loaded.drift_history) == 1
+        assert len(loaded.sessions) == 1
+        assert loaded.sessions[0]["exchanges"][0]["user"] == "What is Python?"
 
     def test_load_missing_file(self):
         data = self.store.load()
@@ -65,13 +79,42 @@ class TestSessionMemoryStore:
             parsed = json.load(f)
         assert parsed["original_context"] == "test"
 
-    def test_roundtrip_with_vectors(self):
+    def test_sessions_roundtrip(self):
         data = SessionMemoryData(
-            original_vector=[0.1, 0.2, 0.3],
-            last_response_vector=[0.4, 0.5, 0.6],
-            last_response_text="Hello world",
+            session_count=1,
+            sessions=[{
+                "session_number": 1,
+                "status": "active",
+                "exchanges": [
+                    {"exchange": 1, "user": "Hello", "assistant": "Hi there",
+                     "score": 95.0, "verdict": "fresh", "explanation": "Good"},
+                ],
+                "summary": None,
+                "final_drift_score": None,
+            }],
         )
         self.store.save(data)
         loaded = self.store.load()
-        assert loaded.original_vector == [0.1, 0.2, 0.3]
-        assert loaded.last_response_text == "Hello world"
+        assert len(loaded.sessions) == 1
+        assert loaded.sessions[0]["status"] == "active"
+        assert loaded.sessions[0]["exchanges"][0]["assistant"] == "Hi there"
+
+    def test_backward_compat_old_format(self):
+        """Old files with drift_history should be migrated to sessions."""
+        old_data = {
+            "original_context": "You are a tutor.",
+            "session_count": 2,
+            "drift_history": [
+                {"turn": 1, "session": 1, "score": 95.0, "verdict": "fresh", "explanation": "Good"},
+                {"turn": 2, "session": 1, "score": 80.0, "verdict": "mild", "explanation": "Mild drift"},
+                {"turn": 1, "session": 2, "score": 90.0, "verdict": "fresh", "explanation": "Good"},
+            ],
+        }
+        with open(self.path, "w") as f:
+            json.dump(old_data, f)
+
+        loaded = self.store.load()
+        assert len(loaded.sessions) == 2
+        assert loaded.sessions[0]["session_number"] == 1
+        assert len(loaded.sessions[0]["exchanges"]) == 2
+        assert loaded.sessions[1]["session_number"] == 2

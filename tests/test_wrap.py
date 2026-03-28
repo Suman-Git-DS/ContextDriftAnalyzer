@@ -122,7 +122,8 @@ class TestOpenAIProxy:
         )
         # Verify turn was recorded
         session = wrapped.tracker.session
-        assert len(session.turns) == 2  # user + assistant
+        assert len(session.turns) == 2  # user + assistant (1 exchange)
+        assert session.turn_count == 1  # 1 Q&A exchange
         assert session.turns[0].content == "Tell me about Python"
 
     def test_completions_proxy_getattr_fallthrough(self):
@@ -290,6 +291,7 @@ class TestDriftClientWrapper:
             )
         session = wrapped.tracker.session
         assert len(session.turns) == 6  # 3 user + 3 assistant
+        assert session.turn_count == 3  # 3 Q&A exchanges
 
 
 class TestUnknownClient:

@@ -156,7 +156,7 @@ class ContextManager:
             parts.append("\n--- Previous Session Context ---")
             for s in self._summaries:
                 parts.append(
-                    f"[Session {s.session_number} | {s.turn_count} turns | "
+                    f"[Session {s.session_number} | {s.turn_count} exchanges | "
                     f"drift: {s.final_drift_score:.1f}/100]: {s.summary}"
                 )
 
@@ -172,9 +172,16 @@ class ContextManager:
 
     def load_summaries(self, summaries_data: list[dict]) -> None:
         """Load summaries from persisted data (e.g., .session_memory file)."""
-        self._summaries = [
-            SessionSummary(**s) for s in summaries_data
-        ]
+        self._summaries = []
+        for s in summaries_data:
+            # Handle both old (turn_count) and new (exchange_count) format
+            tc = s.get("exchange_count", s.get("turn_count", 0))
+            self._summaries.append(SessionSummary(
+                session_number=s["session_number"],
+                summary=s["summary"],
+                turn_count=tc,
+                final_drift_score=s["final_drift_score"],
+            ))
 
     def export_summaries(self) -> list[dict]:
         """Export summaries for persistence."""
@@ -182,7 +189,7 @@ class ContextManager:
             {
                 "session_number": s.session_number,
                 "summary": s.summary,
-                "turn_count": s.turn_count,
+                "exchange_count": s.turn_count,
                 "final_drift_score": s.final_drift_score,
             }
             for s in self._summaries
@@ -190,17 +197,39 @@ class ContextManager:
 
     @staticmethod
     def _default_summarize(text: str) -> str:
-        """Simple extractive summarization fallback.
+        """Extract topics from Q&A exchanges into a concise summary.
 
-        Takes the first and last sentences as a crude summary.
+        Parses the structured Q&A format and lists topics discussed.
         For production use, provide a proper summarize_fn (e.g., LLM-based).
         """
-        sentences = [s.strip() for s in text.replace("\n", ". ").split(".") if s.strip()]
-        if not sentences:
+        if not text.strip():
             return ""
-        if len(sentences) <= 2:
-            return ". ".join(sentences) + "."
 
-        # Take first 2 and last sentence
-        selected = sentences[:2] + [sentences[-1]]
-        return ". ".join(selected) + "."
+        # Extract questions from Q&A formatted text
+        topics = []
+        for line in text.split("\n"):
+            line = line.strip()
+            if line.startswith("Q") and ":" in line:
+                # Extract the question text after "Q1: "
+                question = line.split(":", 1)[1].strip()
+                # Shorten to first 80 chars
+                if len(question) > 80:
+                    question = question[:77] + "..."
+                topics.append(question)
+
+        if not topics:
+            # Fallback for non-structured text
+            words = text.split()
+            preview = " ".join(words[:30])
+            if len(words) > 30:
+                preview += "..."
+            return f"Discussed: {preview}"
+
+        if len(topics) <= 3:
+            return "Topics discussed: " + "; ".join(topics) + "."
+
+        # For longer sessions, show first 2 and last topic
+        return (
+            f"Topics discussed: {topics[0]}; {topics[1]}; "
+            f"... and {len(topics) - 2} more, ending with: {topics[-1]}."
+        )

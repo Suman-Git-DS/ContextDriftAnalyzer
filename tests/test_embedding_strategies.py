@@ -211,22 +211,24 @@ class TestFewShotWithEmbedding:
                 ),
             ],
         )
-        session_with.add_user_message("Hello")
-        session_with.add_assistant_message(
-            "Python function code class loop example"
+        # Use a response that's related to programming/tutoring but not
+        # identical to the few-shot examples, so the richer reference
+        # (with few-shots about functions/loops) gives a different cosine
+        borderline_response = (
+            "To learn programming you should practice writing code every day "
+            "and start with basic concepts like data types and control flow"
         )
+        session_with.add_user_message("Hello")
+        session_with.add_assistant_message(borderline_response)
 
         # Session WITHOUT few-shots
         session_without = Session(system_prompt="You are a Python tutor.")
         session_without.add_user_message("Hello")
-        session_without.add_assistant_message(
-            "Python function code class loop example"
-        )
+        session_without.add_assistant_message(borderline_response)
 
         score_with = analyzer.analyze(session_with).score
         score_without = analyzer.analyze(session_without).score
 
-        # The session with few-shots should have a richer initial context,
-        # resulting in a different (typically higher) score when response
-        # matches the few-shot pattern
+        # Both sessions use the same response but different reference contexts.
+        # The richer context (with few-shots) should produce a different score.
         assert score_with != score_without

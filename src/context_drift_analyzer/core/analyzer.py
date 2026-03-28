@@ -66,6 +66,7 @@ class DriftAnalyzer:
 
         self.decay_rate = decay_rate
         self.window_size = window_size
+        self._floor_score: Optional[float] = None
 
         if strategies is not None:
             self.strategy = (
@@ -113,6 +114,14 @@ class DriftAnalyzer:
 
         # Clamp to [0, 100]
         final_score = max(0.0, min(100.0, decayed_score))
+
+        # Score floor: once the score drops, it cannot bounce back up
+        # within the same session. This prevents misleading recovery
+        # when the assistant uses on-topic keywords in redirect responses.
+        if self._floor_score is not None:
+            final_score = min(final_score, self._floor_score)
+        self._floor_score = final_score
+
         verdict = DriftVerdict.from_score(final_score)
 
         return DriftScore(
@@ -129,6 +138,10 @@ class DriftAnalyzer:
                 "turns_evaluated": len(recent_texts),
             },
         )
+
+    def reset_floor(self) -> None:
+        """Reset the score floor. Call when starting a new session."""
+        self._floor_score = None
 
     def is_effective(self, session: Session) -> bool:
         """Quick check: is the session context still effective?"""

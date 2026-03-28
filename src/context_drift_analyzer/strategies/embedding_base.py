@@ -22,10 +22,13 @@ from typing import Optional
 
 from context_drift_analyzer.strategies.base import BaseStrategy
 
-# Calibration: in practice, cosine similarity between a system prompt
-# (instruction text) and an on-topic response rarely exceeds 0.55-0.60.
-# We scale the [0, MAX_EXPECTED_SIM] range to [0, 100].
-MAX_EXPECTED_SIMILARITY = 0.55
+# Calibration: cosine similarity between instruction-style text
+# ("You are a banking assistant...") and response-style text
+# ("We offer credit cards...") typically ranges from ~0.02 (off-topic)
+# to ~0.36 (perfectly on-topic) for short prompts. With few-shot
+# examples the range extends higher (~0.45). We use 0.32 to map
+# on-topic responses to 85-100 and off-topic to 5-30.
+MAX_EXPECTED_SIMILARITY = 0.32
 
 
 class EmbeddingStrategy(BaseStrategy):
@@ -84,11 +87,30 @@ class EmbeddingStrategy(BaseStrategy):
         # Compute cosine similarity
         raw_similarity = self._cosine_similarity(ref_embedding, current_embedding)
 
-        # Calibrated scaling: map [0, max_similarity] → [0, 100]
-        # This ensures that realistic on-topic responses score high (70-95)
-        # rather than low (20-40) due to the instruction-vs-response gap.
-        scaled = (raw_similarity / self._max_similarity) * 100.0
-        score = max(0.0, min(100.0, scaled))
+        # Calibrated scaling with zone-based mapping.
+        # Cosine similarity between instruction text and response text has
+        # a compressed range: on-topic ~0.20-0.40, off-topic ~0.01-0.10.
+        # Linear scaling doesn't spread these well. Instead, we use a
+        # zone-based approach:
+        #   - Below off-topic ceiling (0.10): map to 0-25 (critical/severe)
+        #   - Transition zone (0.10-0.20): map to 25-75 (moderate)
+        #   - Above on-topic floor (0.20): map to 75-100 (mild/fresh)
+        OFF_TOPIC_CEIL = 0.10   # cosine above this is unlikely to be off-topic
+        ON_TOPIC_FLOOR = 0.20   # cosine above this is likely on-topic
+
+        if raw_similarity <= OFF_TOPIC_CEIL:
+            # Clearly off-topic: scale [0, 0.10] -> [0, 25]
+            score = (raw_similarity / OFF_TOPIC_CEIL) * 25.0
+        elif raw_similarity <= ON_TOPIC_FLOOR:
+            # Transition zone: scale [0.10, 0.20] -> [25, 75]
+            frac = (raw_similarity - OFF_TOPIC_CEIL) / (ON_TOPIC_FLOOR - OFF_TOPIC_CEIL)
+            score = 25.0 + frac * 50.0
+        else:
+            # On-topic: scale [0.20, max_sim] -> [75, 100]
+            frac = (raw_similarity - ON_TOPIC_FLOOR) / (self._max_similarity - ON_TOPIC_FLOOR)
+            score = 75.0 + min(frac, 1.0) * 25.0
+
+        score = max(0.0, min(100.0, score))
 
         return score, {self.name: round(score, 2)}
 

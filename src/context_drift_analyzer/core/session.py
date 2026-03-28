@@ -9,11 +9,11 @@ from typing import Optional
 
 @dataclass
 class Turn:
-    """A single conversation turn."""
+    """A single conversation turn (one Q&A exchange = one turn)."""
 
     role: str  # "user", "assistant", or "system"
     content: str
-    turn_number: int
+    turn_number: int  # The exchange number (1-based)
 
 
 @dataclass
@@ -46,16 +46,15 @@ class Session:
     _turn_counter: int = field(default=0, repr=False)
 
     def add_user_message(self, content: str) -> Turn:
-        """Record a user message."""
-        return self._add_turn("user", content)
+        """Record a user message. Increments the exchange counter."""
+        self._turn_counter += 1
+        turn = Turn(role="user", content=content, turn_number=self._turn_counter)
+        self.turns.append(turn)
+        return turn
 
     def add_assistant_message(self, content: str) -> Turn:
-        """Record an assistant response."""
-        return self._add_turn("assistant", content)
-
-    def _add_turn(self, role: str, content: str) -> Turn:
-        self._turn_counter += 1
-        turn = Turn(role=role, content=content, turn_number=self._turn_counter)
+        """Record an assistant response. Same exchange number as the user message."""
+        turn = Turn(role="assistant", content=content, turn_number=self._turn_counter)
         self.turns.append(turn)
         return turn
 
@@ -73,7 +72,12 @@ class Session:
 
     @property
     def turn_count(self) -> int:
-        """Total number of turns in the session."""
+        """Total number of Q&A exchanges in the session."""
+        return self._turn_counter
+
+    @property
+    def exchange_count(self) -> int:
+        """Alias for turn_count — number of Q&A exchanges."""
         return self._turn_counter
 
     @property
@@ -91,8 +95,14 @@ class Session:
         return self.turns[-n:]
 
     def get_full_text(self) -> str:
-        """Concatenate all turn content into a single string."""
-        return " ".join(t.content for t in self.turns)
+        """Format all turns as readable Q&A exchanges."""
+        lines = []
+        for turn in self.turns:
+            if turn.role == "user":
+                lines.append(f"Q{turn.turn_number}: {turn.content}")
+            elif turn.role == "assistant":
+                lines.append(f"A{turn.turn_number}: {turn.content}")
+        return "\n".join(lines)
 
     def reset(self) -> None:
         """Clear all turns but keep the system prompt, few-shots, and session ID."""

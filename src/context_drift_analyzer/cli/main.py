@@ -34,25 +34,25 @@ def cmd_status(args: argparse.Namespace) -> None:
     data = store.load()
     print(f"Session Memory: {args.file}")
     print(f"  Sessions:       {data.session_count}")
-    print(f"  Total turns:    {data.total_turns}")
     print(f"  Context frozen: {data.context_frozen}")
-    print(f"  Summaries:      {len(data.session_summaries)}")
-    print(f"  Drift entries:  {len(data.drift_history)}")
+    print(f"  Total sessions: {len(data.sessions)}")
 
-    if data.drift_history:
-        last = data.drift_history[-1]
-        print(f"\n  Latest drift:")
-        print(f"    Score:   {last.get('score', 'N/A')}/100")
-        print(f"    Verdict: {last.get('verdict', 'N/A')}")
-        print(f"    Reason:  {last.get('explanation', 'N/A')}")
-
-    if data.session_summaries:
-        print(f"\n  Session summaries:")
-        for s in data.session_summaries:
-            print(
-                f"    Session {s.get('session_number', '?')}: "
-                f"{s.get('summary', '')[:80]}..."
-            )
+    for s in data.sessions:
+        sn = s.get("session_number", "?")
+        status = s.get("status", "?")
+        exchanges = s.get("exchanges", [])
+        summary = s.get("summary")
+        score = s.get("final_drift_score")
+        print(f"\n  Session {sn} [{status}] — {len(exchanges)} exchanges")
+        if score is not None:
+            print(f"    Final drift: {score:.1f}/100")
+        if summary:
+            print(f"    Summary: {summary[:80]}")
+        if exchanges:
+            last_ex = exchanges[-1]
+            print(f"    Last exchange: Q: {last_ex.get('user', '')[:50]}")
+            print(f"                   A: {last_ex.get('assistant', '')[:50]}")
+            print(f"                   Score: {last_ex.get('score', '?')}/100 ({last_ex.get('verdict', '?')})")
 
 
 def cmd_reset(args: argparse.Namespace) -> None:
@@ -73,21 +73,32 @@ def cmd_history(args: argparse.Namespace) -> None:
         return
 
     data = store.load()
-    entries = data.drift_history[-args.last :] if args.last else data.drift_history
+
+    if not data.sessions:
+        print("No drift history recorded.")
+        return
+
+    # Flatten all exchanges across sessions for display
+    all_exchanges = []
+    for s in data.sessions:
+        for e in s.get("exchanges", []):
+            all_exchanges.append({**e, "session": s.get("session_number", "?")})
+
+    entries = all_exchanges[-args.last:] if args.last else all_exchanges
 
     if not entries:
         print("No drift history recorded.")
         return
 
-    print(f"{'Turn':>5} {'Session':>8} {'Score':>7} {'Verdict':>12}  Explanation")
+    print(f"{'Exch':>4} {'Sess':>4} {'Score':>7} {'Verdict':<10} {'User Question':<40}")
     print("-" * 80)
     for e in entries:
         print(
-            f"{e.get('turn', '?'):>5} "
-            f"{e.get('session', '?'):>8} "
+            f"{e.get('exchange', '?'):>4} "
+            f"{e.get('session', '?'):>4} "
             f"{e.get('score', 0):>7.1f} "
-            f"{e.get('verdict', '?'):>12}  "
-            f"{e.get('explanation', '')[:50]}"
+            f"{e.get('verdict', '?'):<10} "
+            f"{e.get('user', '')[:40]}"
         )
 
 

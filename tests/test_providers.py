@@ -29,7 +29,7 @@ class TestGenericDriftTracker:
             ),
         )
         assert 0 <= drift.score <= 100
-        assert drift.turn_number == 2  # 1 user + 1 assistant
+        assert drift.turn_number == 1  # 1 Q&A exchange
 
     def test_drift_decreases_with_off_topic(self):
         tracker = GenericDriftTracker(
@@ -75,7 +75,8 @@ class TestGenericDriftTracker:
         drift = tracker.record_assistant_response(
             "Python variables and functions are core concepts."
         )
-        assert drift.turn_number == 1
+        # No user message recorded, so exchange number is 0
+        assert drift.turn_number == 0
 
 
 class TestDriftAwareResponse:

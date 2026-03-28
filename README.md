@@ -289,17 +289,77 @@ tracker = DriftTracker(
 )
 ```
 
-The `.session_memory` file is a plain JSON file stored locally:
+The `.session_memory` file is a plain JSON file that stores a full audit trail of every conversation:
+
+```json
+{
+  "original_context": "You are a banking assistant for Acme Bank...",
+  "session_count": 2,
+  "context_frozen": false,
+  "sessions": [
+    {
+      "session_number": 1,
+      "status": "completed",
+      "exchanges": [
+        {
+          "exchange": 1,
+          "user": "What credit cards do you offer?",
+          "assistant": "We offer the Acme Rewards Card (2% cashback)...",
+          "score": 95.0,
+          "verdict": "fresh",
+          "explanation": "Context well-preserved..."
+        },
+        {
+          "exchange": 2,
+          "user": "How do I apply for a home loan?",
+          "assistant": "For a home loan, you'll need...",
+          "score": 88.3,
+          "verdict": "mild",
+          "explanation": "Mild drift: core banking topics present."
+        }
+      ],
+      "summary": "Topics discussed: What credit cards do you offer?; How do I apply for a home loan?.",
+      "final_drift_score": 88.3
+    },
+    {
+      "session_number": 2,
+      "status": "active",
+      "exchanges": [
+        {
+          "exchange": 1,
+          "user": "What are your fixed deposit rates?",
+          "assistant": "Our current FD rates are...",
+          "score": 91.2,
+          "verdict": "fresh",
+          "explanation": "Context well-preserved..."
+        }
+      ],
+      "summary": null,
+      "final_drift_score": null
+    }
+  ]
+}
+```
+
+**Key fields:**
 
 | Field | Description |
 |-------|-------------|
-| `original_context` | The full initial context (system prompt + few-shots) |
-| `session_summaries` | List of past session summaries |
-| `session_count` | Total number of sessions |
-| `total_turns` | Cumulative turn count |
-| `context_frozen` | Whether context is frozen |
-| `drift_history` | List of `{turn, session, score, verdict, explanation}` entries |
-| `last_response_text` | Most recent response text |
+| `original_context` | The full initial context (system prompt + few-shot examples) |
+| `session_count` | Current session number |
+| `context_frozen` | Whether context modifications are locked |
+| `sessions` | Array of session objects — each contains the full exchange trail |
+| `sessions[].session_number` | Session ID (1, 2, 3, ...) |
+| `sessions[].status` | `"active"` (in progress) or `"completed"` (ended with summary) |
+| `sessions[].exchanges` | Array of Q&A exchanges with drift scores |
+| `sessions[].exchanges[].exchange` | Exchange number within the session (1, 2, 3, ...) |
+| `sessions[].exchanges[].user` | The user's question |
+| `sessions[].exchanges[].assistant` | The assistant's response (capped at 500 chars) |
+| `sessions[].exchanges[].score` | Drift score (0-100) for this exchange |
+| `sessions[].exchanges[].verdict` | `fresh`, `mild`, `moderate`, `severe`, or `critical` |
+| `sessions[].exchanges[].explanation` | Human-readable explanation of drift |
+| `sessions[].summary` | Auto-generated summary (set when session ends) |
+| `sessions[].final_drift_score` | Final drift score when session was closed |
 
 > **Note:** Add `.session_memory` to your `.gitignore`. Do not commit it — it may contain content from your conversations.
 
@@ -414,31 +474,42 @@ Here is exactly what happens when you call `tracker.record_turn()`:
 2. ASSISTANT RESPONSE stripped of markdown formatting
    (code blocks, headers, bold, links removed to avoid false-positive drift)
               ↓
-3. Cleaned response recorded in Session
+3. OFF-TOPIC REDIRECT STRIPPING:
+   If response contains the off-topic marker ("This is off-topic"),
+   the redirect portion ("I can help you with savings, loans...")
+   is stripped so on-topic keywords don't inflate the score.
               ↓
-4. STRATEGY SCORING (if mode="always"):
+4. Cleaned response recorded in Session
+              ↓
+5. STRATEGY SCORING (if mode="always"):
    a. The initial context (system prompt + few-shots) is embedded → reference vector
       (cached after first call — never re-computed)
    b. Recent assistant responses (last N turns) are embedded → current vector
    c. Cosine similarity(reference, current) → raw score (0-1)
-   d. Calibrated scaling [0, 0.55] → [0, 100] for meaningful scores
+   d. Zone-based calibration:
+      - Cosine 0–0.10 → Score 0–25  (off-topic: CRITICAL/SEVERE)
+      - Cosine 0.10–0.20 → Score 25–75 (transition: MODERATE)
+      - Cosine 0.20+ → Score 75–100 (on-topic: MILD/FRESH)
    e. Exponential decay applied: raw_score × decay_rate^(turns/2)
-   f. Clamped to 0-100 → final drift score
+   f. Score floor enforced: score can never bounce back up within a session
+   g. Clamped to 0-100 → final drift score
               ↓
-5. EXPLANATION generated:
-   - Score-based analysis with topic comparison
-   - Shared and divergent topics identified
+6. EXPLANATION generated:
+   - User question compared against original context topics
+   - If user went off-topic, explanation says so explicitly
    - 1-2 sentence explanation produced (locally, no API calls)
               ↓
-6. PERSISTENCE (if enabled):
-   - Drift entry appended to .session_memory drift_history
-   - Session metadata updated
+7. PERSISTENCE (if enabled):
+   - Q&A exchange appended to active session in .session_memory
+   - Full user question + assistant response + drift score saved
               ↓
-7. TURN RESULT returned with:
+8. TURN RESULT returned with:
    - drift score + verdict
    - explanation
    - managed context string
 ```
+
+> **Zero API calls for scoring.** All drift detection (embedding, cosine similarity, explanation) runs locally. The only API calls are the ones you make to your LLM for the actual chat.
 
 **When you call `tracker.end_session()`:**
 
@@ -451,6 +522,30 @@ Here is exactly what happens when you call `tracker.record_turn()`:
 6. State persisted to .session_memory
 7. Next session starts fresh with original context + summaries intact
 ```
+
+## Off-Topic Detection
+
+When the user asks an off-topic question, a well-behaved LLM will refuse and redirect: *"I can't help with pasta recipes, but I can help you with savings accounts, credit cards, loans..."* The problem is that these redirect responses are full of **on-topic keywords** that inflate the drift score.
+
+The solution: instruct your LLM to prefix off-topic responses with a marker phrase. The tracker detects this marker and **strips the redirect portion** before scoring, so only the off-topic acknowledgement is measured:
+
+```python
+# Add this to your system prompt:
+# "If a user asks something unrelated to banking, respond with:
+#  'This is off-topic and I may not have relevant information.
+#   I can help you with banking products, accounts, loans, and credit cards.'"
+
+tracker = DriftTracker(
+    system_prompt="You are a banking assistant... (with off-topic instruction above)",
+    off_topic_marker="This is off-topic",  # default — set to None to disable
+)
+```
+
+**Before stripping:** Assistant says *"This is off-topic... I can help with savings, loans, credit cards"* → score stays high (banking keywords everywhere)
+
+**After stripping:** Only *"This is off-topic and I may not have relevant information about pasta"* is scored → score drops properly
+
+Additionally, the **score floor** ensures that once the score drops in a session, it never bounces back up — even if the stripping misses some redirect text.
 
 ## Cost and Latency
 
@@ -480,6 +575,7 @@ DriftTracker(
     explain_fn=None,                         # custom explainer (str, str, float) -> str
     strip_md=True,                           # strip markdown before embedding
     frozen=False,                            # freeze context (no modifications)
+    off_topic_marker="This is off-topic",    # marker to detect off-topic responses (None to disable)
 )
 ```
 
