@@ -1,4 +1,11 @@
-"""LLM provider wrappers with built-in drift tracking."""
+"""LLM provider wrappers with built-in drift tracking.
+
+Note: Provider-specific wrappers (OpenAI, Anthropic) have been replaced
+by the unified DriftTracker. Use DriftTracker instead — it works with
+any LLM pipeline.
+
+The GenericDriftTracker is kept for backward compatibility.
+"""
 
 from context_decay_drift.providers.base import BaseProvider, DriftAwareResponse
 from context_decay_drift.providers.generic import GenericDriftTracker
@@ -8,13 +15,3 @@ __all__ = [
     "DriftAwareResponse",
     "GenericDriftTracker",
 ]
-
-# Lazy imports for optional provider dependencies
-def __getattr__(name: str):
-    if name == "OpenAIDriftWrapper":
-        from context_decay_drift.providers.openai_provider import OpenAIDriftWrapper
-        return OpenAIDriftWrapper
-    if name == "AnthropicDriftWrapper":
-        from context_decay_drift.providers.anthropic_provider import AnthropicDriftWrapper
-        return AnthropicDriftWrapper
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

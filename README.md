@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">context-decay-drift</h1>
   <p align="center">
-    Measure and monitor how LLM conversations drift from their initial context over time — using semantic embeddings.
+    Detect, explain, and <strong>solve</strong> context drift in LLM conversations across sessions.
   </p>
 </p>
 
@@ -15,373 +15,438 @@
 
 ## The Problem
 
-LLM-powered chatbots lose focus over long conversations. After several turns, the model "forgets" its system prompt and few-shot examples, leading to:
+LLM-powered chatbots lose focus over long conversations. After several sessions, the model "forgets" its system prompt and few-shot examples, leading to off-topic responses, reduced accuracy, and poor user experience — with no visibility into *when* this happens or *why*.
 
-- Off-topic responses that ignore the bot's intended persona
-- Reduced accuracy as the conversation context window fills up
-- Poor user experience with no visibility into when the bot becomes unreliable
+Most tools only **detect** drift. This package **detects, explains, and solves** it:
 
-**context-decay-drift** solves this by giving you a **real-time drift score (0-100)** that tracks how far a conversation has semantically drifted from its initial context (system prompt + few-shot examples). Wrap it around any LLM client and get actionable signals for when to reset, warn, or intervene.
+| Capability | What it does |
+|-----------|-------------|
+| **Detect** | Drift score (0-100) via semantic embeddings |
+| **Explain** | 1-2 line human-readable reason for drift |
+| **Solve** | Context management: original context + session summaries, kept within token budget |
+| **Persist** | `.session_memory` file tracks drift across restarts and deploys |
 
 ## How It Works
 
 ```
-Session 1 (Turn 1-2):  Score 95  [FRESH]     - Bot is on-topic
-Session 2 (Turn 3-6):  Score 78  [MILD]      - Slight drift detected
-Session 3 (Turn 7-12): Score 58  [MODERATE]   - Noticeable drift
-Session 4 (Turn 13+):  Score 34  [SEVERE]     - Bot is off-rails, reset recommended
+Session 1 (Turn 1-2):  Score 92  [FRESH]      "Context well-preserved."
+Session 2 (Turn 3-6):  Score 76  [MILD]       "Mild drift: key topics fading — loops, classes."
+Session 3 (Turn 7-12): Score 53  [SEVERE]      "Only 35% of original keywords present."
+Session 4 (Turn 13+):  Score 28  [CRITICAL]    "Conversation departed from original purpose."
+                                                ↑ recommend reset
 ```
-
-The library embeds your initial context (system prompt + few-shot examples) and compares it against recent assistant responses using **cosine similarity of embedding vectors**. You choose the embedding backend:
-
-| Backend | Cost | Quality | Install |
-|---------|------|---------|---------|
-| Sentence Transformers (default) | Free, local | Great | `pip install context-decay-drift[semantic]` |
-| OpenAI Embeddings | ~$0.02/1M tokens | Excellent | `pip install context-decay-drift[openai]` |
-| Any custom model | Varies | You decide | `pip install context-decay-drift` |
-| Keyword/TF fallback | Free, local | Basic | `pip install context-decay-drift` |
 
 ## Installation
 
 ```bash
-# Core + Sentence Transformers (recommended)
+# Core + Sentence Transformers (recommended — free, local, semantic)
 pip install context-decay-drift[semantic]
 
-# Core + OpenAI embeddings
-pip install context-decay-drift[openai]
-
-# Core + Anthropic wrapper
-pip install context-decay-drift[anthropic]
-
-# Everything
-pip install context-decay-drift[all]
-
-# Core only (keyword/TF strategies, or bring your own embedder)
+# Core only (zero dependencies — keyword/TF strategies, or bring your own embedder)
 pip install context-decay-drift
+
+# Everything (semantic + OpenAI + Anthropic embedding support)
+pip install context-decay-drift[all]
 ```
 
 ## Quick Start
 
-### Sentence Transformers (Recommended — Free, Local, Semantic)
-
 ```python
-from context_decay_drift import DriftAnalyzer, Session, FewShotExample
-from context_decay_drift.strategies.sentence_transformer import SentenceTransformerStrategy
+from context_decay_drift import DriftTracker, FewShotExample
 
-# Define your initial context: system prompt + few-shot examples
-session = Session(
+tracker = DriftTracker(
     system_prompt="You are a Python programming tutor. Always provide code examples.",
     few_shot_examples=[
-        FewShotExample(
-            user="What is a variable?",
-            assistant="A variable stores data. Example: x = 5"
-        ),
-        FewShotExample(
-            user="How do loops work?",
-            assistant="Loops iterate over sequences. Example: for i in range(10): print(i)"
-        ),
+        FewShotExample(user="What is a variable?", assistant="A variable stores data. Example: x = 5"),
     ],
-)
-
-# Use sentence-transformers for semantic drift detection
-analyzer = DriftAnalyzer(
-    strategies=[SentenceTransformerStrategy(model_name="all-MiniLM-L6-v2")],
-    decay_rate=0.95,
-)
-
-# Simulate conversation turns
-session.add_user_message("How do I define a function?")
-session.add_assistant_message(
-    "Use the def keyword. Example: def greet(name): return f'Hello {name}'"
-)
-
-result = analyzer.analyze(session)
-print(f"Drift: {result.score:.1f}/100 ({result.verdict.value})")
-# Drift: 88.2/100 (mild)
-
-# Later... conversation drifts off topic
-session.add_user_message("What's a good pasta recipe?")
-session.add_assistant_message("Try carbonara: eggs, parmesan, pancetta, spaghetti.")
-
-result = analyzer.analyze(session)
-print(f"Drift: {result.score:.1f}/100 ({result.verdict.value})")
-# Drift: 41.5/100 (severe)
-print(f"Still effective: {result.is_effective}")  # False
-print(f"Needs reset: {result.needs_reset}")       # True
-```
-
-### OpenAI Embeddings (Paid API, High Quality)
-
-```python
-from openai import OpenAI
-from context_decay_drift import DriftAnalyzer, Session
-from context_decay_drift.strategies.openai_embedding import OpenAIEmbeddingStrategy
-
-client = OpenAI()  # Uses OPENAI_API_KEY
-
-analyzer = DriftAnalyzer(
-    strategies=[OpenAIEmbeddingStrategy(client=client, model="text-embedding-3-small")],
-)
-
-session = Session(system_prompt="You are a Python tutor. Always explain with examples.")
-session.add_user_message("Explain decorators")
-session.add_assistant_message("Decorators wrap functions. Example: @my_decorator...")
-
-result = analyzer.analyze(session)
-print(f"Drift: {result.score:.1f}/100")
-```
-
-### Bring Your Own Embedder (Cohere, Voyage, Google, etc.)
-
-```python
-from context_decay_drift import DriftAnalyzer, Session
-from context_decay_drift.strategies.callable_embedding import CallableEmbeddingStrategy
-
-# Example: Cohere
-import cohere
-co = cohere.Client("your-api-key")
-
-def cohere_embed(text: str) -> list[float]:
-    response = co.embed(texts=[text], model="embed-english-v3.0", input_type="search_document")
-    return response.embeddings[0]
-
-analyzer = DriftAnalyzer(
-    strategies=[CallableEmbeddingStrategy(embed_fn=cohere_embed, strategy_name="cohere")]
-)
-
-# Example: Google Vertex AI
-def vertex_embed(text: str) -> list[float]:
-    # your Vertex AI embedding logic here
-    ...
-
-analyzer = DriftAnalyzer(
-    strategies=[CallableEmbeddingStrategy(embed_fn=vertex_embed, strategy_name="vertex")]
-)
-```
-
-### OpenAI Chat Wrapper (Drift Score in Every Response)
-
-```python
-from openai import OpenAI
-from context_decay_drift.providers.openai_provider import OpenAIDriftWrapper
-
-client = OpenAI()
-
-wrapper = OpenAIDriftWrapper(
-    client=client,
-    model="gpt-4o",
-    system_prompt="You are a Python tutor. Always provide code examples.",
-)
-
-result = wrapper.chat("How do I define a function?")
-
-print(result.content)                           # The LLM response text
-print(f"Drift: {result.drift_score:.1f}/100")   # 85.2/100
-print(f"Verdict: {result.drift_verdict}")        # "mild"
-print(result.response)                           # Original OpenAI response object
-
-# Full drift details
-print(result.drift.to_dict())
-```
-
-### Anthropic Chat Wrapper
-
-```python
-from anthropic import Anthropic
-from context_decay_drift.providers.anthropic_provider import AnthropicDriftWrapper
-
-client = Anthropic()
-
-wrapper = AnthropicDriftWrapper(
-    client=client,
-    model="claude-sonnet-4-20250514",
-    system_prompt="You are a Python tutor. Always provide code examples.",
-    max_tokens=1024,
-)
-
-result = wrapper.chat("Explain decorators in Python")
-print(f"Drift: {result.drift_score:.1f}/100")
-
-if result.drift.needs_reset:
-    wrapper.reset_session()
-```
-
-### Generic Tracker (Any LLM Pipeline)
-
-```python
-from context_decay_drift.providers.generic import GenericDriftTracker
-
-tracker = GenericDriftTracker(
-    system_prompt="You are a Python tutor. Always provide code examples.",
-    decay_rate=0.95,
-    window_size=5,
+    mode="always",              # "always" or "ondemand"
+    persist=True,               # save to .session_memory file
+    max_summary_sessions=3,     # keep last 3 session summaries
 )
 
 # After each LLM call in your pipeline:
-drift = tracker.record_turn(
-    user_message="How do I use list comprehensions?",
-    assistant_response="List comprehensions provide a concise way to create lists..."
+result = tracker.record_turn(
+    user_message="How do loops work?",
+    assistant_response="Use for loops: for i in range(10): print(i)"
 )
 
-print(f"Drift Score: {drift.score:.1f}/100")
-print(f"Verdict: {drift.verdict.value}")
-print(f"Still Effective: {drift.is_effective}")
-print(f"Needs Reset: {drift.needs_reset}")
+print(f"Score:       {result.drift.score:.1f}/100")      # 85.2/100
+print(f"Verdict:     {result.drift.verdict.value}")       # "mild"
+print(f"Explanation: {result.explanation}")                # "Mild drift: ..."
+print(f"Effective:   {result.drift.is_effective}")         # True
+print(f"Needs reset: {result.drift.needs_reset}")          # False
+
+# Get managed context (original + session summaries) for your LLM
+system_message = tracker.get_managed_context()
+
+# End session — summarizes and preserves for next time
+tracker.end_session()
 ```
 
-## Few-Shot Examples as Initial Context
+## On-Demand vs Always-On Mode
 
-The initial context your drift is measured against is not just the system prompt — it includes few-shot examples too. This is critical because many production bots rely on few-shot pairs to define behavior:
+Choose when drift scoring happens:
 
 ```python
-from context_decay_drift import Session, FewShotExample
+# Always-on: scores every turn (default)
+# Good for: monitoring dashboards, alerting
+tracker = DriftTracker(system_prompt="...", mode="always")
+result = tracker.record_turn(user_msg, assistant_msg)
+print(result.drift.score)  # computed automatically
 
-session = Session(
-    system_prompt="You are a customer support agent for Acme Corp.",
-    few_shot_examples=[
-        FewShotExample(
-            user="I can't log in",
-            assistant="I'm sorry to hear that. Let me help you reset your password. Please go to acme.com/reset."
-        ),
-        FewShotExample(
-            user="How do I upgrade my plan?",
-            assistant="You can upgrade anytime at acme.com/billing. Would you like me to walk you through it?"
-        ),
-    ],
+# On-demand: scores only when you ask
+# Good for: production pipelines where you check periodically
+tracker = DriftTracker(system_prompt="...", mode="ondemand")
+tracker.record_turn(user_msg, assistant_msg)  # no scoring overhead
+tracker.record_turn(user_msg2, assistant_msg2)
+
+report = tracker.check()  # explicitly request drift check
+print(report.drift.score)
+print(report.explanation)
+```
+
+## Context Management (The Solution)
+
+Most drift tools stop at detection. This package actually **solves** the problem by managing the context window intelligently:
+
+```
+┌──────────────────────────────────────────────┐
+│           Managed Context Window              │
+├──────────────────────────────────────────────┤
+│  [ALWAYS] Original System Prompt             │
+│  [ALWAYS] Few-Shot Examples                  │
+├──────────────────────────────────────────────┤
+│  [AUTO] Session 1 Summary (2-3 sentences)    │
+│  [AUTO] Session 2 Summary (2-3 sentences)    │
+│  [AUTO] Session 3 Summary (2-3 sentences)    │
+├──────────────────────────────────────────────┤
+│  [LIVE] Current Conversation Turns           │
+└──────────────────────────────────────────────┘
+```
+
+**How it works:**
+1. The original context (system prompt + few-shots) is **always preserved** — never truncated
+2. At the end of each session, the conversation is **summarized** into 2-3 compact sentences
+3. You configure how many past session summaries to keep (default: 3)
+4. The managed context = original + summaries — use this as your system message
+5. Old summaries are automatically dropped when `max_summary_sessions` is exceeded
+
+```python
+tracker = DriftTracker(
+    system_prompt="You are a Python tutor.",
+    max_summary_sessions=3,       # keep last 3 session summaries
+    summarize_fn=my_llm_summarizer,  # optional: use an LLM to summarize (see below)
 )
 
-# session.initial_context now contains the full reference text:
-# system prompt + all few-shot pairs combined
-# This is what drift is measured against
+# After each session:
+tracker.end_session()
+
+# Use this as your system message — it includes original context + session summaries
+system_message = tracker.get_managed_context()
+```
+
+### Custom Summarization (LLM-Powered)
+
+By default, summaries use simple extractive logic (first + last sentences). For production, provide an LLM-based summarizer:
+
+```python
+from openai import OpenAI
+client = OpenAI()
+
+def llm_summarize(session_text: str) -> str:
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "Summarize this conversation in 2-3 sentences. Focus on key topics discussed."},
+            {"role": "user", "content": session_text},
+        ],
+        max_tokens=100,
+    )
+    return response.choices[0].message.content
+
+tracker = DriftTracker(
+    system_prompt="...",
+    summarize_fn=llm_summarize,
+)
+```
+
+### Context Control
+
+```python
+# Freeze context — prevent any modifications to session history
+tracker.freeze_context()
+
+# Unfreeze to allow changes again
+tracker.unfreeze_context()
+
+# Clear all session summaries (original context preserved)
+tracker.clear_history()
+
+# Full reset — clears everything including .session_memory file
+tracker.reset()
+```
+
+## Drift Explanation
+
+Every drift score comes with a human-readable explanation of **why** drift occurred:
+
+```python
+result = tracker.record_turn("What's for dinner?", "Try pasta carbonara...")
+print(result.explanation)
+# "Significant drift: only 25% of original context keywords present.
+#  Conversation shifted toward: carbonara, pasta, recipe."
+```
+
+Explanations are generated locally (no API calls) by default. You can plug in your own explainer:
+
+```python
+def llm_explain(original_context: str, recent_text: str, score: float) -> str:
+    # Call an LLM to explain the drift
+    ...
+
+tracker = DriftTracker(system_prompt="...", explain_fn=llm_explain)
+```
+
+## Persistence (.session_memory File)
+
+Enable persistence to track drift **across restarts and deploys**:
+
+```python
+tracker = DriftTracker(
+    system_prompt="...",
+    persist=True,
+    persist_path=".session_memory",  # default
+)
+```
+
+The `.session_memory` file is a plain JSON file stored locally:
+
+| Field | Description |
+|-------|-------------|
+| `original_context` | The full initial context (system prompt + few-shots) |
+| `session_summaries` | List of past session summaries |
+| `session_count` | Total number of sessions |
+| `total_turns` | Cumulative turn count |
+| `context_frozen` | Whether context is frozen |
+| `drift_history` | List of `{turn, session, score, verdict, explanation}` entries |
+| `last_response_text` | Most recent response text |
+
+> **Note:** Add `.session_memory` to your `.gitignore`. Do not commit it — it may contain content from your conversations.
+
+## Embedding Strategies
+
+Choose how drift is measured:
+
+### Sentence Transformers (Recommended — Free, Local)
+
+```python
+from context_decay_drift.strategies.sentence_transformer import SentenceTransformerStrategy
+
+tracker = DriftTracker(
+    system_prompt="...",
+    strategies=[SentenceTransformerStrategy(model_name="all-MiniLM-L6-v2")],
+)
+```
+
+Models: `all-MiniLM-L6-v2` (80MB, fast), `all-mpnet-base-v2` (420MB, best quality), `paraphrase-MiniLM-L3-v2` (60MB, fastest).
+
+### OpenAI Embeddings (Paid API)
+
+```python
+from openai import OpenAI
+from context_decay_drift.strategies.openai_embedding import OpenAIEmbeddingStrategy
+
+client = OpenAI()
+tracker = DriftTracker(
+    system_prompt="...",
+    strategies=[OpenAIEmbeddingStrategy(client=client, model="text-embedding-3-small")],
+)
+```
+
+### Bring Your Own Embedder
+
+```python
+from context_decay_drift.strategies.callable_embedding import CallableEmbeddingStrategy
+
+def my_embedder(text: str) -> list[float]:
+    # Cohere, Voyage, Google, custom model, etc.
+    ...
+
+tracker = DriftTracker(
+    system_prompt="...",
+    strategies=[CallableEmbeddingStrategy(embed_fn=my_embedder, strategy_name="cohere")],
+)
+```
+
+### Keyword + Token Overlap (Zero Dependencies)
+
+The default strategies when no embedding backend is installed:
+
+```python
+# No extra install needed — uses keyword hit-rate + TF cosine similarity
+tracker = DriftTracker(system_prompt="...")
+```
+
+### Composite (Mix Multiple Strategies)
+
+```python
+from context_decay_drift.strategies.composite import CompositeStrategy
+from context_decay_drift.strategies.sentence_transformer import SentenceTransformerStrategy
+from context_decay_drift.strategies.keyword import KeywordStrategy
+
+tracker = DriftTracker(
+    system_prompt="...",
+    strategies=[
+        CompositeStrategy(
+            strategies=[SentenceTransformerStrategy(), KeywordStrategy()],
+            weights=[0.8, 0.2],  # 80% semantic, 20% keyword
+        )
+    ],
+)
+```
+
+## CLI
+
+```bash
+# Show session memory status
+context-decay-drift status
+context-decay-drift status --file /path/to/.session_memory
+
+# Show drift history
+context-decay-drift history
+context-decay-drift history --last 10
+
+# Delete session memory
+context-decay-drift reset
+
+# Freeze/unfreeze context
+context-decay-drift freeze
+context-decay-drift unfreeze
 ```
 
 ## Drift Score Reference
 
-| Score Range | Verdict      | Meaning                                           |
-|-------------|-------------|---------------------------------------------------|
-| 90 - 100    | `FRESH`     | Context well-preserved, bot is on-topic           |
-| 75 - 89     | `MILD`      | Minor drift, still effective                      |
-| 55 - 74     | `MODERATE`  | Noticeable drift, monitor closely                 |
-| 35 - 54     | `SEVERE`    | Significant drift, consider resetting context     |
-| 0 - 34      | `CRITICAL`  | Context largely lost, reset recommended           |
+| Score | Verdict | Meaning | Action |
+|-------|---------|---------|--------|
+| 90-100 | `FRESH` | Context well-preserved | None needed |
+| 75-89 | `MILD` | Minor drift | Monitor |
+| 55-74 | `MODERATE` | Noticeable drift | Consider intervention |
+| 35-54 | `SEVERE` | Significant drift | Reset recommended |
+| 0-34 | `CRITICAL` | Context largely lost | Reset required |
 
-## Configuration
+## Under the Hood
 
-### Decay Rate
+Here is exactly what happens when you call `tracker.record_turn()`:
 
-Controls how fast the score decays per conversation turn. Range: `(0, 1]`.
-
-```python
-DriftAnalyzer(decay_rate=0.98)  # Slow decay — forgiving for long conversations
-DriftAnalyzer(decay_rate=0.95)  # Default — balanced
-DriftAnalyzer(decay_rate=0.90)  # Fast decay — strict, flags drift early
+```
+1. USER MESSAGE recorded in Session
+              ↓
+2. ASSISTANT RESPONSE stripped of markdown formatting
+   (code blocks, headers, bold, links removed to avoid false-positive drift)
+              ↓
+3. Cleaned response recorded in Session
+              ↓
+4. STRATEGY SCORING (if mode="always"):
+   a. The initial context (system prompt + few-shots) is embedded → reference vector
+      (cached after first call — never re-computed)
+   b. Recent assistant responses (last N turns) are embedded → current vector
+   c. Cosine similarity(reference, current) → raw score (0-1)
+   d. Exponential decay applied: raw_score × decay_rate^(turns/2)
+   e. Clamped to 0-100 → final drift score
+              ↓
+5. EXPLANATION generated:
+   - Keywords from original context vs response are compared
+   - Missing/new topics identified
+   - 1-2 sentence explanation produced (locally, no API calls)
+              ↓
+6. PERSISTENCE (if enabled):
+   - Drift entry appended to .session_memory drift_history
+   - Session metadata updated
+              ↓
+7. TURN RESULT returned with:
+   - drift score + verdict
+   - explanation
+   - managed context string
 ```
 
-### Window Size
+**When you call `tracker.end_session()`:**
 
-How many recent assistant turns to evaluate. `0` means evaluate all turns.
-
-```python
-DriftAnalyzer(window_size=3)   # Responsive to recent changes
-DriftAnalyzer(window_size=10)  # Smoother, less noisy
-DriftAnalyzer(window_size=0)   # Evaluate entire history
+```
+1. Final drift score computed
+2. Session text SUMMARIZED (extractive or LLM-based)
+3. Summary added to ContextManager (capped at max_summary_sessions)
+4. Session turns CLEARED
+5. Session counter incremented
+6. State persisted to .session_memory
+7. Next session starts fresh with original context + summaries intact
 ```
 
-### Composite Strategies
+## Cost and Latency
 
-Mix semantic and lexical strategies with custom weights:
+| Strategy | Cost | Latency per Turn | Install Size | Quality |
+|----------|------|-------------------|-------------|---------|
+| Keyword + Token Overlap (default) | **Free** | **<1ms** | **0 MB** | Basic (lexical) |
+| Sentence Transformers (`all-MiniLM-L6-v2`) | **Free** | ~20-50ms (CPU) | ~80 MB | Good (semantic) |
+| Sentence Transformers (`all-mpnet-base-v2`) | **Free** | ~50-100ms (CPU) | ~420 MB | Best (semantic) |
+| OpenAI `text-embedding-3-small` | ~$0.02/1M tokens | ~100-200ms (API) | ~1 MB | Excellent |
+| OpenAI `text-embedding-3-large` | ~$0.13/1M tokens | ~100-200ms (API) | ~1 MB | Best (API) |
+| Custom callable | Varies | Varies | Varies | You decide |
+
+**Session summarization** (optional):
+- Default extractive: **Free, <1ms**
+- LLM-based (e.g., GPT-4o-mini): ~$0.15/1M tokens, ~500ms per session end
+
+**Context management overhead:** Zero. It's just string concatenation.
+
+## Configuration Reference
 
 ```python
-from context_decay_drift.strategies.sentence_transformer import SentenceTransformerStrategy
-from context_decay_drift.strategies.keyword import KeywordStrategy
-from context_decay_drift.strategies.composite import CompositeStrategy
-
-strategy = CompositeStrategy(
-    strategies=[
-        SentenceTransformerStrategy(),   # Semantic meaning
-        KeywordStrategy(top_n=50),       # Lexical keyword presence
-    ],
-    weights=[0.8, 0.2],  # 80% semantic, 20% keyword
+DriftTracker(
+    system_prompt="...",                     # Required: your system instructions
+    few_shot_examples=[...],                 # Optional: FewShotExample pairs
+    mode="always",                           # "always" or "ondemand"
+    strategies=[...],                        # Optional: custom strategies
+    decay_rate=0.95,                         # 0-1, lower = faster decay
+    window_size=5,                           # recent turns to evaluate (0 = all)
+    persist=False,                           # save to .session_memory
+    persist_path=".session_memory",          # file path
+    max_summary_sessions=3,                  # past session summaries to keep
+    summarize_fn=None,                       # custom summarizer (str) -> str
+    explain_fn=None,                         # custom explainer (str, str, float) -> str
+    strip_md=True,                           # strip markdown before embedding
+    frozen=False,                            # freeze context (no modifications)
 )
-
-analyzer = DriftAnalyzer(strategies=[strategy])
 ```
-
-### Sentence Transformer Models
-
-Choose based on your speed/quality tradeoff:
-
-```python
-# Fast, 80MB, good quality (default)
-SentenceTransformerStrategy(model_name="all-MiniLM-L6-v2")
-
-# Best quality, 420MB, slower
-SentenceTransformerStrategy(model_name="all-mpnet-base-v2")
-
-# Fastest, 60MB, decent quality
-SentenceTransformerStrategy(model_name="paraphrase-MiniLM-L3-v2")
-
-# GPU acceleration
-SentenceTransformerStrategy(model_name="all-MiniLM-L6-v2", device="cuda")
-```
-
-## How Scoring Works
-
-```
-                    Initial Context
-                   (System Prompt +
-                    Few-Shot Examples)
-                          |
-                     [Embed Once]
-                          |
-                    Reference Vector
-                          |
-    Turn 1 ───────────────┤ cosine_similarity(ref, response) → 0.92
-    Turn 2 ───────────────┤ cosine_similarity(ref, response) → 0.85
-    Turn 3 ───────────────┤ cosine_similarity(ref, response) → 0.61
-    Turn 4 ───────────────┤ cosine_similarity(ref, response) → 0.38
-                          |
-                   Apply Decay Factor
-                 (decay_rate ^ turns/2)
-                          |
-                   Final Score (0-100)
-```
-
-1. **Embed the initial context** (system prompt + few-shot pairs) into a reference vector
-2. **Embed recent assistant responses** into a current vector
-3. **Cosine similarity** between reference and current = raw alignment score
-4. **Exponential decay** applied based on conversation length
-5. **Clamp to 0-100** and classify into verdict
-
-The reference embedding is **cached** — it's computed once and reused for every turn.
 
 ## Project Structure
 
 ```
-context_decay_drift/
-  src/context_decay_drift/
-    core/
-      analyzer.py          # Central drift analysis engine
-      scorer.py            # DriftScore and DriftVerdict data structures
-      session.py           # Session, Turn, and FewShotExample management
-    strategies/
-      base.py              # BaseStrategy abstract class
-      embedding_base.py    # EmbeddingStrategy base (shared scoring logic)
-      sentence_transformer.py  # HuggingFace sentence-transformers backend
-      openai_embedding.py  # OpenAI embedding API backend
-      callable_embedding.py    # Bring-your-own embedding function
-      keyword.py           # Keyword hit-rate strategy (lexical fallback)
-      token_overlap.py     # TF cosine similarity (lexical fallback)
-      composite.py         # Weighted multi-strategy combiner
-    providers/
-      base.py              # BaseProvider and DriftAwareResponse
-      openai_provider.py   # OpenAI chat SDK wrapper
-      anthropic_provider.py    # Anthropic chat SDK wrapper
-      generic.py           # Provider-agnostic tracker
-    utils/
-      text.py              # Tokenization, TF vectors, cosine similarity
-  tests/                   # 97 tests covering all modules
-  examples/                # Ready-to-run examples for each provider
+src/context_decay_drift/
+  tracker.py               # DriftTracker — main entry point
+  core/
+    analyzer.py            # Drift analysis engine
+    scorer.py              # DriftScore, DriftVerdict
+    session.py             # Session, Turn, FewShotExample
+  context/
+    manager.py             # Context window management + session summaries
+    explainer.py           # Drift explanation generator
+  persistence/
+    session_memory.py      # .session_memory file read/write
+  strategies/
+    embedding_base.py      # Base class for embedding strategies
+    sentence_transformer.py    # HuggingFace sentence-transformers
+    openai_embedding.py    # OpenAI embedding API
+    callable_embedding.py  # Bring-your-own embedder
+    keyword.py             # Keyword hit-rate (lexical)
+    token_overlap.py       # TF cosine similarity (lexical)
+    composite.py           # Weighted multi-strategy combiner
+  cli/
+    main.py                # CLI tool (status/history/reset/freeze)
+  utils/
+    text.py                # Tokenization, TF vectors
+    markdown.py            # Markdown stripping
+tests/                     # 164 tests
+examples/                  # Ready-to-run examples
 ```
 
 ## Running Tests

@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "context-decay-drift"
-version = "0.2.0"
-description = "Measure and monitor context drift in LLM conversations across sessions"
+version = "0.3.0"
+description = "Detect, explain, and solve context drift in LLM conversations across sessions"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
@@ -18,6 +18,8 @@ keywords = [
     "context-decay",
     "chatbot",
     "monitoring",
+    "embeddings",
+    "sentence-transformers",
     "openai",
     "anthropic",
 ]
@@ -38,19 +40,22 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+semantic = ["sentence-transformers>=2.0.0"]
 openai = ["openai>=1.0.0"]
 anthropic = ["anthropic>=0.20.0"]
-semantic = ["sentence-transformers>=2.0.0"]
 all = [
+    "sentence-transformers>=2.0.0",
     "openai>=1.0.0",
     "anthropic>=0.20.0",
-    "sentence-transformers>=2.0.0",
 ]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "pytest-asyncio>=0.21.0",
 ]
+
+[project.scripts]
+context-decay-drift = "context_decay_drift.cli.main:main"
 
 [project.urls]
 Homepage = "https://github.com/Suman-Git-DS/ContextDecayDrift"
