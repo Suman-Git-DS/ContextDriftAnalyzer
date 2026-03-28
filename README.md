@@ -6,9 +6,9 @@
 </p>
 
 <p align="center">
-  <a href="https://pypi.org/project/context-drift-analyzer/"><img alt="PyPI" src="https://img.shields.io/pypi/v/context-drift-analyzer"></a>
-  <a href="https://pypi.org/project/context-drift-analyzer/"><img alt="Python" src="https://img.shields.io/pypi/pyversions/context-drift-analyzer"></a>
-  <a href="https://github.com/Suman-Git-DS/ContextDriftAnalyzer/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/Suman-Git-DS/ContextDriftAnalyzer"></a>
+  <a href="https://pypi.org/project/context-drift-analyzer/"><img alt="PyPI" src="https://img.shields.io/pypi/v/context-drift-analyzer?v=1"></a>
+  <a href="https://pypi.org/project/context-drift-analyzer/"><img alt="Python" src="https://img.shields.io/pypi/pyversions/context-drift-analyzer?v=1"></a>
+  <a href="https://github.com/Suman-Git-DS/ContextDriftAnalyzer/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/Suman-Git-DS/ContextDriftAnalyzer?v=1"></a>
 </p>
 
 ---
